@@ -29,11 +29,11 @@
 
     // Clear local.system.healthlog.
     function clearLog() {
-        forEachNode((conn) => conn.getDB("local").system.healthlog.drop());
+        forEachNode(conn => conn.getDB("local").system.healthlog.drop());
     }
 
     function addEnoughForMultipleBatches(collection) {
-        collection.insertMany([...Array(10000).keys()].map((x) => ({_id: x})));
+        collection.insertMany([...Array(10000).keys()].map(x => ({_id: x})));
     }
 
     // Name for a collection which takes multiple batches to check and which shouldn't be modified
@@ -51,7 +51,7 @@
         }
 
         function dbCheckCompleted() {
-            return db.currentOp().inprog.filter((x) => x["desc"] == "dbCheck")[0] === undefined;
+            return db.currentOp().inprog.filter(x => x["desc"] == "dbCheck")[0] === undefined;
         }
 
         assert.soon(dbCheckCompleted, "dbCheck timed out", maxMs, 50);
@@ -172,13 +172,13 @@
         let db = master.getDB(dbName);
 
         // Add enough documents that dbCheck will take a few seconds.
-        db[collName].insertMany([...Array(10000).keys()].map((x) => ({i: x})));
+        db[collName].insertMany([...Array(10000).keys()].map(x => ({i: x})));
 
         assert.commandWorked(db.runCommand({"dbCheck": collName}));
 
         let coll = db[collName];
 
-        while (db.currentOp().inprog.filter((x) => x["desc"] === "dbCheck").length) {
+        while (db.currentOp().inprog.filter(x => x["desc"] === "dbCheck").length) {
             coll.updateOne({}, { "$inc": { "i": 10 }});
             coll.insertOne({ "i": 42 });
             coll.deleteOne({});
@@ -189,7 +189,7 @@
         checkLogAllConsistent(master);
         // Omit check for total counts, which might have changed with concurrent updates.
 
-        forEachSecondary((secondary) => checkLogAllConsistent(secondary, true));
+        forEachSecondary(secondary => checkLogAllConsistent(secondary, true));
     }
 
     simpleTestConsistent();
@@ -325,4 +325,130 @@
 
     // Ignore this check until resolution of SERVER-30719.
     // testSucceedsOnStepdown();
+    
+    function testFailsOnWrongFCV() {
+        let master = replSet.getPrimary();
+        let db = master.getDB(dbName);
+
+        assert.commandWorked(db.runCommand({dbCheck: multiBatchSimpleCollName}));
+        assert.commandWorked(
+            master.getDB("admin").adminCommand({setFeatureCompatibilityVersion: "3.4"})
+        );
+
+        // Check that the server is still responding.
+        try {
+            assert.commandWorked(db.runCommand({ping: 1}),
+                                 "ping failed after FCV change during dbCheck");
+        } catch(e) {
+            doassert("dbCheck with FCV change crashed server");
+        }
+
+        assert.commandFailed(db.runCommand({dbCheck: multiBatchSimpleCollName}));
+
+        assert.commandWorked(
+            master.getDB("admin").adminCommand({setFeatureCompatibilityVersion: "3.6"})
+        );
+    }
+
+    testFailsOnWrongFCV();
+
+    function getDummyOplogEntry() {
+        let master = replSet.getPrimary();
+        let coll = master.getDB(dbName)[collName];
+
+        let replSetStatus =
+            assert.commandWorked(master.getDB("admin").runCommand({replSetGetStatus: 1}));
+        let connStatus = replSetStatus.members.filter(m => m.self)[0];
+        let lastOpTime = connStatus.optime;
+
+        let entry = master.getDB("local").oplog.rs.find().sort({$natural: -1})[0];
+        delete entry["ui"];
+        entry["ns"] = coll.stats().ns;
+        entry["ts"] = Timestamp(entry["ts"].t, entry["ts"].i + 1);
+
+        return entry;
+    }
+
+    // Create various inconsistencies, and check that dbCheck spots them.
+    function insertOnSecondaries(doc) {
+        let master = replSet.getPrimary();
+        let entry = getDummyOplogEntry();
+        entry["op"] = "i";
+        entry["o"] = doc;
+
+        master.getDB("local").oplog.rs.insertOne(entry);
+    }
+
+    // Run an apply-ops-ish command on a secondary.
+    function runCommandOnSecondaries(doc) {
+        let master = replSet.getPrimary();
+        let entry = getDummyOplogEntry();
+        entry["op"] = "c";
+        entry["o"] = doc;
+
+        master.getDB("local").oplog.rs.insertOne(entry);
+    }
+
+    // And on a primary.
+    function runCommandOnPrimary(doc) {
+        let master = replSet.getPrimary();
+        let entry = getDummyOplogEntry();
+        entry["op"] = "c";
+        entry["o"] = doc;
+
+        master.getDB("admin").runCommand({applyOps: [entry]});
+    }
+
+    // Just add an extra document, and test that it catches it.
+    function simpleTestCatchesExtra() {
+        let master = replSet.getPrimary();
+        let db = master.getDB(dbName);
+
+        clearLog();
+
+        insertOnSecondaries({_id: 12390290});
+
+        assert.commandWorked(db.runCommand({dbCheck: collName}));
+        awaitDbCheckCompletion(db);
+
+        let nErrors = replSet.getSecondary().getDB("local").system.healthlog.find({
+            operation: /dbCheck.*/,
+            severity: "error"
+        }).count();
+
+        assert.neq(nErrors, 0, "dbCheck found no errors after insertion on secondaries");
+        assert.eq(nErrors, 1, "dbCheck found too many errors after single inconsistent insertion");
+    }
+
+    // Test that dbCheck catches changing various pieces of collection metadata.
+    function testCollectionMetadataChanges() {
+        let master = replSet.getPrimary();
+        let db = master.getDB(dbName);
+        db[collName].drop();
+        clearLog();
+
+        // Add it on the secondaries with no automatic _id index
+        runCommandOnSecondaries({create: collName, autoIndexId: true});
+        // and then add it on primaries with an automatic _id index.
+        runCommandOnPrimary({create: collName, autoIndexId: false})
+
+        assert.commandWorked(db.runCommand({dbCheck: collName}));
+        awaitDbCheckCompletion(db);
+
+        let nErrors = replSet.getSecondary().getDB("local").system.healthlog.find({
+            operation: /dbCheck.*/,
+            severity: "error"
+        }).count();
+
+        print(replSet.getSecondary().getDB("local").system.healthlog.find({
+            operation: /dbCheck.*/,
+        }).toArray().map(tojson));
+
+        assert.eq(nErrors, 1, "dbCheck found wrong number of errors after inconsistent `create`");
+
+        clearLog();
+    }
+
+    simpleTestCatchesExtra();
+    testCollectionMetadataChanges();
 })();
