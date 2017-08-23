@@ -347,14 +347,15 @@ private:
 
         using Result = StatusWith<BatchStats>;
         auto result = writeConflictRetry(opCtx, "dbCheck batch", info.nss.ns(), [&] {
-            WriteUnitOfWork uow(opCtx);
-
             // Find the relevant collection.
             auto agc = getCollectionForDbCheck(opCtx, info.nss, OplogEntriesEnum::Batch);
             auto collection = agc->getCollection();
+
             if (!collection) {
                 return Result(ErrorCodes::NamespaceNotFound, "dbCheck collection no longer exists");
             }
+
+            WriteUnitOfWork uow(opCtx);
 
             boost::optional<DbCheckHasher> hasher;
             try {
