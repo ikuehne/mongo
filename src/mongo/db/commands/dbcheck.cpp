@@ -65,14 +65,44 @@ struct DbCheckCollectionInfo {
  */
 using DbCheckRun = std::vector<DbCheckCollectionInfo>;
 
+/**
+ * Check if dbCheck can run on the given namespace.
+ */
+bool canRunDbCheckOn(const NamespaceString& nss) {
+    if (nss.isLocal()) {
+        return false;
+    }
+
+    const std::set<StringData> replicatedSystemCollections{"system.backup_users",
+                                                           "system.js",
+                                                           "system.new_users",
+                                                           "system.roles",
+                                                           "system.users",
+                                                           "system.version",
+                                                           "system.views"};
+    if (nss.isSystem()) {
+        if (replicatedSystemCollections.count(nss.coll()) == 0) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 std::unique_ptr<DbCheckRun> singleCollectionRun(OperationContext* opCtx,
                                                 const std::string& dbName,
                                                 const DbCheckSingleInvocation& invocation) {
     NamespaceString nss(dbName, invocation.getColl());
     AutoGetCollectionForRead agc(opCtx, nss);
+
     uassert(ErrorCodes::NamespaceNotFound,
             "Collection " + invocation.getColl() + " not found",
             agc.getCollection());
+
+    uassert(40615,
+            "Cannot run dbCheck on " + nss.toString() + " because it is not replicated",
+            canRunDbCheckOn(nss));
+
     auto start = invocation.getMinKey();
     auto end = invocation.getMaxKey();
     auto maxCount = invocation.getMaxCount();
@@ -86,6 +116,11 @@ std::unique_ptr<DbCheckRun> singleCollectionRun(OperationContext* opCtx,
 std::unique_ptr<DbCheckRun> fullDatabaseRun(OperationContext* opCtx,
                                             const std::string& dbName,
                                             const DbCheckAllInvocation& invocation) {
+    uassert(
+        ErrorCodes::InvalidNamespace,
+        "Cannot run dbCheck on local database",
+        dbName != "local");
+
     // Read the list of collections in a database-level lock.
     AutoGetDb agd(opCtx, StringData(dbName), MODE_S);
     auto db = agd.getDb();
