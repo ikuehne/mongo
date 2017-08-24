@@ -12,6 +12,7 @@
 
     replSet.startSet();
     replSet.initiate();
+    replSet.awaitSecondaryNodes();
 
     function forEachSecondary(f) {
         for (let secondary of replSet.getSecondaries()) {
@@ -57,6 +58,9 @@
         assert.soon(dbCheckCompleted, "dbCheck timed out", maxMs, 50);
         replSet.awaitSecondaryNodes();
         replSet.awaitReplication();
+
+        // Give the health log buffers some time to flush.
+        sleep(100);
     }
 
     // Check that everything in the health log shows a successful and complete check with no found
@@ -235,8 +239,12 @@
         let start = 1000;
         let end = 9000;
 
-        db.runCommand({dbCheck: multiBatchSimpleCollName, minKey: start, maxKey: end});
+        assert.commandWorked(
+            db.runCommand({dbCheck: multiBatchSimpleCollName, minKey: start, maxKey: end})
+        );
+
         awaitDbCheckCompletion(db);
+
         checkEntryBounds(start, end);
 
         // Now, clear the health logs again,
@@ -245,12 +253,12 @@
         let maxCount = 5000;
 
         // and do the same with a count constraint.
-        db.runCommand({
+        assert.commandWorked(db.runCommand({
             dbCheck: multiBatchSimpleCollName,
             minKey: start,
             maxKey: end,
             maxCount: maxCount
-        });
+        }));
 
         // We expect it to reach the count limit before reaching maxKey.
         awaitDbCheckCompletion(db);
@@ -259,12 +267,12 @@
         // Finally, do the same with a size constraint.
         clearLog();
         let maxSize = maxCount * docSize;
-        db.runCommand({
+        assert.commandWorked(db.runCommand({
             dbCheck: multiBatchSimpleCollName,
             minKey: start,
             maxKey: end,
             maxSize: maxSize
-        });
+        }));
         awaitDbCheckCompletion(db);
         checkEntryBounds(start, start + maxCount);
     }
@@ -311,8 +319,8 @@
 
         rs.stepDown();
 
-        // Should terminate quickly because of stepdown; say 1 s instead of 10.
-        awaitDbCheckCompletion(db, 1000);
+        // Should terminate quickly because of stepdown; say 0.5 s instead of 10.
+        awaitDbCheckCompletion(db, 500);
 
         // Check that the server is still responding.
         try {
@@ -323,8 +331,7 @@
         }
     }
 
-    // Ignore this check until resolution of SERVER-30719.
-    // testSucceedsOnStepdown();
+    testSucceedsOnStepdown();
     
     function testFailsOnWrongFCV() {
         let master = replSet.getPrimary();
@@ -352,6 +359,10 @@
 
     testFailsOnWrongFCV();
 
+    function collectionUuid(db, collName) {
+        return db.getCollectionInfos().filter(coll => coll.name === collName)[0].info.uuid;
+    }
+
     function getDummyOplogEntry() {
         let master = replSet.getPrimary();
         let coll = master.getDB(dbName)[collName];
@@ -362,7 +373,7 @@
         let lastOpTime = connStatus.optime;
 
         let entry = master.getDB("local").oplog.rs.find().sort({$natural: -1})[0];
-        delete entry["ui"];
+        entry["ui"] = collectionUuid(master.getDB(dbName), collName);
         entry["ns"] = coll.stats().ns;
         entry["ts"] = Timestamp(entry["ts"].t, entry["ts"].i + 1);
 
@@ -380,11 +391,15 @@
     }
 
     // Run an apply-ops-ish command on a secondary.
-    function runCommandOnSecondaries(doc) {
+    function runCommandOnSecondaries(doc, ns) {
         let master = replSet.getPrimary();
         let entry = getDummyOplogEntry();
         entry["op"] = "c";
         entry["o"] = doc;
+
+        if (ns !== undefined) {
+            entry["ns"] = ns;
+        }
 
         master.getDB("local").oplog.rs.insertOne(entry);
     }
@@ -427,22 +442,25 @@
         db[collName].drop();
         clearLog();
 
-        // Add it on the secondaries with no automatic _id index
-        runCommandOnSecondaries({create: collName, autoIndexId: true});
-        // and then add it on primaries with an automatic _id index.
-        runCommandOnPrimary({create: collName, autoIndexId: false})
+        // Create the collection on the primary.
+        db.createCollection(collName, {validationLevel: "off"});
+
+        // Add an index on the secondaries.
+        runCommandOnSecondaries({
+            createIndexes: collName,
+            v: 2,
+            key: { "foo": 1 },
+            name: "foo_1"
+        }, dbName + ".$cmd");
 
         assert.commandWorked(db.runCommand({dbCheck: collName}));
         awaitDbCheckCompletion(db);
 
         let nErrors = replSet.getSecondary().getDB("local").system.healthlog.find({
-            operation: /dbCheck.*/,
-            severity: "error"
+            "operation": /dbCheck.*/,
+            "severity": "error",
+            "data.success": true
         }).count();
-
-        print(replSet.getSecondary().getDB("local").system.healthlog.find({
-            operation: /dbCheck.*/,
-        }).toArray().map(tojson));
 
         assert.eq(nErrors, 1, "dbCheck found wrong number of errors after inconsistent `create`");
 
