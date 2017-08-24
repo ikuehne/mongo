@@ -26,6 +26,8 @@
  * then also delete it in the license file.
  */
 
+#define MONGO_LOG_DEFAULT_COMPONENT ::mongo::logger::LogComponent::kCommand
+
 #include "mongo/platform/basic.h"
 
 #include "mongo/db/auth/authorization_session.h"
@@ -41,6 +43,8 @@
 #include "mongo/db/repl/oplog.h"
 #include "mongo/db/repl/optime.h"
 #include "mongo/util/background.h"
+
+#include "mongo/util/log.h"
 
 namespace mongo {
 
@@ -99,7 +103,7 @@ std::unique_ptr<DbCheckRun> singleCollectionRun(OperationContext* opCtx,
             "Collection " + invocation.getColl() + " not found",
             agc.getCollection());
 
-    uassert(40615,
+    uassert(40616,
             "Cannot run dbCheck on " + nss.toString() + " because it is not replicated",
             canRunDbCheckOn(nss));
 
@@ -174,7 +178,7 @@ std::unique_ptr<DbCheckRun> getRun(OperationContext* opCtx,
 class DbCheckJob : public BackgroundJob {
 public:
     DbCheckJob(const StringData& dbName, std::unique_ptr<DbCheckRun> run)
-        : BackgroundJob(true), _dbName(dbName.toString()), _run(std::move(run)) {}
+        : BackgroundJob(true), _done(false), _dbName(dbName.toString()), _run(std::move(run)) {}
 
 protected:
     virtual std::string name() const override {
@@ -189,6 +193,7 @@ protected:
             _doCollection(coll);
 
             if (_done) {
+                log() << "dbCheck terminated due to stepdown";
                 return;
             }
         }
