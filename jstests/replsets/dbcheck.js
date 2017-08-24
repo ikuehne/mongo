@@ -42,6 +42,10 @@
     let multiBatchSimpleCollName = "dbcheck-simple-collection";
     addEnoughForMultipleBatches(replSet.getPrimary().getDB(dbName)[multiBatchSimpleCollName]);
 
+    function dbCheckCompleted(db) {
+        return db.currentOp().inprog.filter(x => x["desc"] == "dbCheck")[0] === undefined;
+    }
+
     // Wait for dbCheck to complete (on both primaries and secondaries).  Fails an assertion if
     // dbCheck takes longer than maxMs.
     function awaitDbCheckCompletion(db, maxMs) {
@@ -51,11 +55,7 @@
             maxMs = 10000;
         }
 
-        function dbCheckCompleted() {
-            return db.currentOp().inprog.filter(x => x["desc"] == "dbCheck")[0] === undefined;
-        }
-
-        assert.soon(dbCheckCompleted, "dbCheck timed out", maxMs, 50);
+        assert.soon(() => dbCheckCompleted(db), "dbCheck timed out", maxMs, 50);
         replSet.awaitSecondaryNodes();
         replSet.awaitReplication();
 
@@ -305,20 +305,37 @@
         let master = replSet.getPrimary();
         let db = master.getDB(dbName);
 
+        let nodeId = replSet.getNodeId(master);
         assert.commandWorked(db.runCommand({dbCheck: multiBatchSimpleCollName}));
 
-        rs.stepDown();
+        // Step down the master.  This will close our connection.
+        try {
+            master.getDB("admin").runCommand({
+                replSetStepDown: 0,
+                force: true
+            });
+        // (throwing an exception in the process, which we will ignore).
+        } catch (e) {}
 
-        // Should terminate quickly because of stepdown; say 0.5 s instead of 10.
-        awaitDbCheckCompletion(db, 500);
+        // Wait for the cluster to come up.
+        replSet.awaitSecondaryNodes();
 
-        // Check that the server is still responding.
+        // Find the node we ran dbCheck on.
+        db = replSet.getSecondaries().filter(function isPreviousMaster(node) {
+            return replSet.getNodeId(node) === nodeId;
+        })[0].getDB(dbName);
+
+        // Check that it's still responding.
         try {
             assert.commandWorked(db.runCommand({ping: 1}),
                                  "ping failed after stepdown during dbCheck");
         } catch (e) {
-            doassert("dbCheck with stepdown crashed server");
+            doassert("cannot connect after dbCheck with stepdown");
         }
+
+        // And that our dbCheck completed.
+        assert(dbCheckCompleted(db), "dbCheck failed to terminate on stepdown");
+
     }
 
     testSucceedsOnStepdown();
