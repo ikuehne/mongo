@@ -121,9 +121,7 @@ std::unique_ptr<DbCheckRun> fullDatabaseRun(OperationContext* opCtx,
                                             const std::string& dbName,
                                             const DbCheckAllInvocation& invocation) {
     uassert(
-        ErrorCodes::InvalidNamespace,
-        "Cannot run dbCheck on local database",
-        dbName != "local");
+        ErrorCodes::InvalidNamespace, "Cannot run dbCheck on local database", dbName != "local");
 
     // Read the list of collections in a database-level lock.
     AutoGetDb agd(opCtx, StringData(dbName), MODE_S);
