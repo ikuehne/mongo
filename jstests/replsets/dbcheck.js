@@ -380,7 +380,7 @@
         let entry = master.getDB("local").oplog.rs.find().sort({$natural: -1})[0];
         entry["ui"] = collectionUuid(master.getDB(dbName), collName);
         entry["ns"] = coll.stats().ns;
-        entry["ts"] = Timestamp(entry["ts"].t, entry["ts"].i + 1);
+        entry["ts"] = new Timestamp();
 
         return entry;
     }
