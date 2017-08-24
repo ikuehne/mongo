@@ -48,14 +48,10 @@
 
     // Wait for dbCheck to complete (on both primaries and secondaries).  Fails an assertion if
     // dbCheck takes longer than maxMs.
-    function awaitDbCheckCompletion(db, maxMs) {
+    function awaitDbCheckCompletion(db) {
         let start = Date.now();
 
-        if (maxMs === undefined) {
-            maxMs = 10000;
-        }
-
-        assert.soon(() => dbCheckCompleted(db), "dbCheck timed out", maxMs, 50);
+        assert.soon(() => dbCheckCompleted(db), "dbCheck timed out");
         replSet.awaitSecondaryNodes();
         replSet.awaitReplication();
 
