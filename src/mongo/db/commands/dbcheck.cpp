@@ -308,14 +308,9 @@ private:
         entry.setIndexes(indices);
         entry.setOptions(options);
 
-        StatusWith<repl::OpTime> optime =
-            writeConflictRetry(opCtx, "log dbCheck to oplog", collection->ns().ns(), [&] {
-                WriteUnitOfWork uow(opCtx);
-                // Send information on this collection over the oplog for the secondary to check.
-                auto optime = _logOp(opCtx, collection->ns(), collection->uuid(), entry.toBSON());
-                uow.commit();
-                return optime;
-            });
+        // Send information on this collection over the oplog for the secondary to check.
+        StatusWith<repl::OpTime> optime = _logOp(
+                opCtx, collection->ns(), collection->uuid(), entry.toBSON());
 
         if (!optime.isOK()) {
             return true;
@@ -348,65 +343,55 @@ private:
         auto opCtx = uniqueOpCtx.get();
         DbCheckOplogBatch batch;
 
-        using Result = StatusWith<BatchStats>;
-
         // Find the relevant collection.
         auto agc = getCollectionForDbCheck(opCtx, info.nss, OplogEntriesEnum::Batch);
         auto collection = agc->getCollection();
 
         if (!collection) {
-            return Result(ErrorCodes::NamespaceNotFound, "dbCheck collection no longer exists");
+            return {ErrorCodes::NamespaceNotFound, "dbCheck collection no longer exists"};
         }
 
-        auto result = writeConflictRetry(opCtx, "dbCheck batch", info.nss.ns(), [&] {
-            WriteUnitOfWork uow(opCtx);
+        boost::optional<DbCheckHasher> hasher;
+        try {
+            hasher.emplace(opCtx,
+                           collection,
+                           first,
+                           info.end,
+                           std::min(batchDocs, info.maxCount),
+                           std::min(batchBytes, info.maxSize));
+        } catch (const DBException& e) {
+            return e.toStatus();
+        }
 
-            boost::optional<DbCheckHasher> hasher;
-            try {
-                hasher.emplace(opCtx,
-                               collection,
-                               first,
-                               info.end,
-                               std::min(batchDocs, info.maxCount),
-                               std::min(batchBytes, info.maxSize));
-            } catch (const DBException& e) {
-                return Result(e.toStatus());
-            }
+        Status status = hasher->hashAll();
 
-            Status status = hasher->hashAll();
+        if (!status.isOK()) {
+            return status;
+        }
 
-            if (!status.isOK()) {
-                return Result(status);
-            }
+        std::string md5 = hasher->total();
 
-            std::string md5 = hasher->total();
+        batch.setType(OplogEntriesEnum::Batch);
+        batch.setNss(info.nss);
+        batch.setMd5(md5);
+        batch.setMinKey(first);
+        batch.setMaxKey(BSONKey(hasher->lastKey()));
 
-            batch.setType(OplogEntriesEnum::Batch);
-            batch.setNss(info.nss);
-            batch.setMd5(md5);
-            batch.setMinKey(first);
-            batch.setMaxKey(BSONKey(hasher->lastKey()));
+        BatchStats result;
 
-            BatchStats result;
+        // Send information on this batch over the oplog.
+        auto optime = _logOp(opCtx, info.nss, collection->uuid(), batch.toBSON());
 
-            // Send information on this batch over the oplog.
-            auto optime = _logOp(opCtx, info.nss, collection->uuid(), batch.toBSON());
+        if (!optime.isOK()) {
+            return optime.getStatus();
+        }
 
-            if (!optime.isOK()) {
-                return Result(optime.getStatus());
-            }
+        result.time = optime.getValue();
 
-            result.time = optime.getValue();
-
-            uow.commit();
-
-            result.nDocs = hasher->docsSeen();
-            result.nBytes = hasher->bytesSeen();
-            result.lastKey = hasher->lastKey();
-            result.md5 = md5;
-
-            return Result(result);
-        });
+        result.nDocs = hasher->docsSeen();
+        result.nBytes = hasher->bytesSeen();
+        result.lastKey = hasher->lastKey();
+        result.md5 = md5;
 
         return result;
     }
@@ -434,15 +419,20 @@ private:
             return Status(ErrorCodes::PrimarySteppedDown, "dbCheck terminated by stepdown");
         }
 
-        return repl::logOp(opCtx,
-                           "c",
-                           nss,
-                           uuid,
-                           obj,
-                           nullptr,
-                           false,
-                           kUninitializedStmtId,
-                           repl::PreAndPostImageTimestamps());
+        return writeConflictRetry(opCtx, "", NamespaceString::kRsOplogNamespace.ns(), [&] {
+            WriteUnitOfWork uow(opCtx);
+            repl::OpTime result = repl::logOp(opCtx,
+                                              "c",
+                                              nss,
+                                              uuid,
+                                              obj,
+                                              nullptr,
+                                              false,
+                                              kUninitializedStmtId,
+                                              repl::PreAndPostImageTimestamps());
+            uow.commit();
+            return result;
+        });
     }
 };
 
