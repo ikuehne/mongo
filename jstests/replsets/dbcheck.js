@@ -148,9 +148,12 @@
 
         // Calculate the size on the client side, because collection.dataSize is not necessarily the
         // sum of the document sizes.
-        let size = coll.find().toArray().reduce((x, y) => x + bsonsize(y), 0)
+        let size =
+            coll.find()
+                .toArray()
+                .reduce((x, y) => x + bsonsize(y), 0)
 
-        assert.eq(result.totalBytes, size, "dbCheck batches do not count all bytes");
+                    assert.eq(result.totalBytes, size, "dbCheck batches do not count all bytes");
     }
 
     // First check behavior when everything is consistent.

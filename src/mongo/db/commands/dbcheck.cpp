@@ -309,8 +309,8 @@ private:
         entry.setOptions(options);
 
         // Send information on this collection over the oplog for the secondary to check.
-        StatusWith<repl::OpTime> optime = _logOp(
-                opCtx, collection->ns(), collection->uuid(), entry.toBSON());
+        StatusWith<repl::OpTime> optime =
+            _logOp(opCtx, collection->ns(), collection->uuid(), entry.toBSON());
 
         if (!optime.isOK()) {
             return true;
@@ -419,20 +419,21 @@ private:
             return Status(ErrorCodes::PrimarySteppedDown, "dbCheck terminated by stepdown");
         }
 
-        return writeConflictRetry(opCtx, "", NamespaceString::kRsOplogNamespace.ns(), [&] {
-            WriteUnitOfWork uow(opCtx);
-            repl::OpTime result = repl::logOp(opCtx,
-                                              "c",
-                                              nss,
-                                              uuid,
-                                              obj,
-                                              nullptr,
-                                              false,
-                                              kUninitializedStmtId,
-                                              repl::PreAndPostImageTimestamps());
-            uow.commit();
-            return result;
-        });
+        return writeConflictRetry(
+            opCtx, "dbCheck oplog entry", NamespaceString::kRsOplogNamespace.ns(), [&] {
+                WriteUnitOfWork uow(opCtx);
+                repl::OpTime result = repl::logOp(opCtx,
+                                                  "c",
+                                                  nss,
+                                                  uuid,
+                                                  obj,
+                                                  nullptr,
+                                                  false,
+                                                  kUninitializedStmtId,
+                                                  repl::PreAndPostImageTimestamps());
+                uow.commit();
+                return result;
+            });
     }
 };
 
