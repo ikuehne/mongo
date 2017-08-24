@@ -39,7 +39,7 @@
 
     // Name for a collection which takes multiple batches to check and which shouldn't be modified
     // by any of the tests.
-    let multiBatchSimpleCollName = "dbcheck-simple-collection"
+    let multiBatchSimpleCollName = "dbcheck-simple-collection";
     addEnoughForMultipleBatches(replSet.getPrimary().getDB(dbName)[multiBatchSimpleCollName]);
 
     // Wait for dbCheck to complete (on both primaries and secondaries).  Fails an assertion if
@@ -102,19 +102,18 @@
         // another document's minKey, and so on, and then checks that the result of that search
         // has data.maxKey === MaxKey.
         let completeCoverage = healthlog.aggregate([
-            {$match: {
-                "operation": "dbCheckBatch",
-                "data.minKey": MinKey
-            }},
-            {$graphLookup: {
-                from: "system.healthlog",
-                startWith: "$data.minKey",
-                connectToField: "data.minKey",
-                connectFromField: "data.maxKey",
-                as: "batchLimits",
-                restrictSearchWithMatch: { "operation": "dbCheckBatch" }
-            }},
-            {$match: { "batchLimits.data.maxKey": MaxKey }}
+            {$match: {"operation": "dbCheckBatch", "data.minKey": MinKey}},
+            {
+              $graphLookup: {
+                  from: "system.healthlog",
+                  startWith: "$data.minKey",
+                  connectToField: "data.minKey",
+                  connectFromField: "data.maxKey",
+                  as: "batchLimits",
+                  restrictSearchWithMatch: {"operation": "dbCheckBatch"}
+              }
+            },
+            {$match: {"batchLimits.data.maxKey": MaxKey}}
         ]);
 
         assert(completeCoverage.hasNext(), "dbCheck batches do not cover full key range");
@@ -127,14 +126,14 @@
     // the batches in the health log.
     function healthLogCounts(healthlog) {
         let result = healthlog.aggregate([
-            { $match: {
-                "operation": "dbCheckBatch"
-            }},
-            { $group: {
-                "_id": null,
-                "totalDocs": { $sum: "$data.count" },
-                "totalBytes": { $sum: "$data.bytes" }
-            }}
+            {$match: {"operation": "dbCheckBatch"}},
+            {
+              $group: {
+                  "_id": null,
+                  "totalDocs": {$sum: "$data.count"},
+                  "totalBytes": {$sum: "$data.bytes"}
+              }
+            }
         ]);
 
         assert(result.hasNext(), "dbCheck put no batches in health log");
@@ -183,8 +182,8 @@
         let coll = db[collName];
 
         while (db.currentOp().inprog.filter(x => x["desc"] === "dbCheck").length) {
-            coll.updateOne({}, { "$inc": { "i": 10 }});
-            coll.insertOne({ "i": 42 });
+            coll.updateOne({}, {"$inc": {"i": 10}});
+            coll.insertOne({"i": 42});
             coll.deleteOne({});
         }
 
@@ -214,12 +213,12 @@
                 let healthlog = node.getDB("local").system.healthlog;
                 let keyBoundsResult = healthlog.aggregate([
                     {$match: {operation: "dbCheckBatch"}},
-                    {$group:
-                        {
-                            _id: null,
-                            minKey: {$min: "$data.minKey"},
-                            maxKey: {$max: "$data.maxKey"}
-                        }
+                    {
+                      $group: {
+                          _id: null,
+                          minKey: {$min: "$data.minKey"},
+                          maxKey: {$max: "$data.maxKey"}
+                      }
                     }
                 ]);
 
@@ -240,8 +239,7 @@
         let end = 9000;
 
         assert.commandWorked(
-            db.runCommand({dbCheck: multiBatchSimpleCollName, minKey: start, maxKey: end})
-        );
+            db.runCommand({dbCheck: multiBatchSimpleCollName, minKey: start, maxKey: end}));
 
         awaitDbCheckCompletion(db);
 
@@ -253,12 +251,8 @@
         let maxCount = 5000;
 
         // and do the same with a count constraint.
-        assert.commandWorked(db.runCommand({
-            dbCheck: multiBatchSimpleCollName,
-            minKey: start,
-            maxKey: end,
-            maxCount: maxCount
-        }));
+        assert.commandWorked(db.runCommand(
+            {dbCheck: multiBatchSimpleCollName, minKey: start, maxKey: end, maxCount: maxCount}));
 
         // We expect it to reach the count limit before reaching maxKey.
         awaitDbCheckCompletion(db);
@@ -267,12 +261,8 @@
         // Finally, do the same with a size constraint.
         clearLog();
         let maxSize = maxCount * docSize;
-        assert.commandWorked(db.runCommand({
-            dbCheck: multiBatchSimpleCollName,
-            minKey: start,
-            maxKey: end,
-            maxSize: maxSize
-        }));
+        assert.commandWorked(db.runCommand(
+            {dbCheck: multiBatchSimpleCollName, minKey: start, maxKey: end, maxSize: maxSize}));
         awaitDbCheckCompletion(db);
         checkEntryBounds(start, start + maxCount);
     }
@@ -300,9 +290,9 @@
         let master = replSet.getPrimary();
         let db = master.getDB("local");
 
-        assert.commandFailed(db.runCommand({ dbCheck: "oplog.rs" }),
+        assert.commandFailed(db.runCommand({dbCheck: "oplog.rs"}),
                              "dbCheck spuriously succeeded on oplog");
-        assert.commandFailed(master.getDB(dbName).runCommand({ dbCheck: "system.profile" }),
+        assert.commandFailed(master.getDB(dbName).runCommand({dbCheck: "system.profile"}),
                              "dbCheck spuriously succeeded on system.profile");
     }
 
@@ -326,35 +316,33 @@
         try {
             assert.commandWorked(db.runCommand({ping: 1}),
                                  "ping failed after stepdown during dbCheck");
-        } catch(e) {
+        } catch (e) {
             doassert("dbCheck with stepdown crashed server");
         }
     }
 
     testSucceedsOnStepdown();
-    
+
     function testFailsOnWrongFCV() {
         let master = replSet.getPrimary();
         let db = master.getDB(dbName);
 
         assert.commandWorked(db.runCommand({dbCheck: multiBatchSimpleCollName}));
         assert.commandWorked(
-            master.getDB("admin").adminCommand({setFeatureCompatibilityVersion: "3.4"})
-        );
+            master.getDB("admin").adminCommand({setFeatureCompatibilityVersion: "3.4"}));
 
         // Check that the server is still responding.
         try {
             assert.commandWorked(db.runCommand({ping: 1}),
                                  "ping failed after FCV change during dbCheck");
-        } catch(e) {
+        } catch (e) {
             doassert("dbCheck with FCV change crashed server");
         }
 
         assert.commandFailed(db.runCommand({dbCheck: multiBatchSimpleCollName}));
 
         assert.commandWorked(
-            master.getDB("admin").adminCommand({setFeatureCompatibilityVersion: "3.6"})
-        );
+            master.getDB("admin").adminCommand({setFeatureCompatibilityVersion: "3.6"}));
     }
 
     testFailsOnWrongFCV();
@@ -426,10 +414,10 @@
         assert.commandWorked(db.runCommand({dbCheck: collName}));
         awaitDbCheckCompletion(db);
 
-        let nErrors = replSet.getSecondary().getDB("local").system.healthlog.find({
-            operation: /dbCheck.*/,
-            severity: "error"
-        }).count();
+        let nErrors = replSet.getSecondary()
+                          .getDB("local")
+                          .system.healthlog.find({operation: /dbCheck.*/, severity: "error"})
+                          .count();
 
         assert.neq(nErrors, 0, "dbCheck found no errors after insertion on secondaries");
         assert.eq(nErrors, 1, "dbCheck found too many errors after single inconsistent insertion");
@@ -446,21 +434,18 @@
         db.createCollection(collName, {validationLevel: "off"});
 
         // Add an index on the secondaries.
-        runCommandOnSecondaries({
-            createIndexes: collName,
-            v: 2,
-            key: { "foo": 1 },
-            name: "foo_1"
-        }, dbName + ".$cmd");
+        runCommandOnSecondaries({createIndexes: collName, v: 2, key: {"foo": 1}, name: "foo_1"},
+                                dbName + ".$cmd");
 
         assert.commandWorked(db.runCommand({dbCheck: collName}));
         awaitDbCheckCompletion(db);
 
-        let nErrors = replSet.getSecondary().getDB("local").system.healthlog.find({
-            "operation": /dbCheck.*/,
-            "severity": "error",
-            "data.success": true
-        }).count();
+        let nErrors =
+            replSet.getSecondary()
+                .getDB("local")
+                .system.healthlog
+                .find({"operation": /dbCheck.*/, "severity": "error", "data.success": true})
+                .count();
 
         assert.eq(nErrors, 1, "dbCheck found wrong number of errors after inconsistent `create`");
 
