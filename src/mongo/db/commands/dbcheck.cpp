@@ -103,7 +103,7 @@ std::unique_ptr<DbCheckRun> singleCollectionRun(OperationContext* opCtx,
             "Collection " + invocation.getColl() + " not found",
             agc.getCollection());
 
-    uassert(40616,
+    uassert(40617,
             "Cannot run dbCheck on " + nss.toString() + " because it is not replicated",
             canRunDbCheckOn(nss));
 
