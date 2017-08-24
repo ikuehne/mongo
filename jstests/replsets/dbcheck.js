@@ -171,7 +171,7 @@
         checkTotalCounts(master, db[multiBatchSimpleCollName]);
 
         forEachSecondary(function(secondary) {
-            checkLogAllConsistent(secondary, true);
+            checkLogAllConsistent(secondary);
             checkTotalCounts(secondary, secondary.getDB(dbName)[multiBatchSimpleCollName]);
         });
     }
