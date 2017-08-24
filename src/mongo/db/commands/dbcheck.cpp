@@ -279,8 +279,9 @@ private:
         auto uniqueOpCtx = Client::getCurrent()->makeOperationContext();
         auto opCtx = uniqueOpCtx.get();
 
-        // While we get the prev/next UUID information, we need a database-level lock.
-        AutoGetDb agd(opCtx, _dbName, MODE_S);
+        // While we get the prev/next UUID information, we need a database-level lock, plus a global
+        // IX lock (see SERVER-28544).
+        AutoGetDbForDbCheck agd(opCtx, info.nss);
 
         auto collection = agd.getDb()->getCollection(opCtx, info.nss);
 
@@ -344,8 +345,8 @@ private:
         DbCheckOplogBatch batch;
 
         // Find the relevant collection.
-        auto agc = getCollectionForDbCheck(opCtx, info.nss, OplogEntriesEnum::Batch);
-        auto collection = agc->getCollection();
+        AutoGetCollectionForDbCheck agc(opCtx, info.nss, OplogEntriesEnum::Batch);
+        auto collection = agc.getCollection();
 
         if (!collection) {
             return {ErrorCodes::NamespaceNotFound, "dbCheck collection no longer exists"};
@@ -400,11 +401,6 @@ private:
                                     const NamespaceString& nss,
                                     OptionalCollectionUUID uuid,
                                     const BSONObj& obj) {
-        // Stepdown takes a global S lock (see SERVER-28544).  We therefore take an incompatible
-        // lock to ensure that stepdown can't happen between when we check if this thread has been
-        // interrupted and when we attempt to write to the oplog.
-        Lock::GlobalLock lock(opCtx, MODE_IX, std::numeric_limits<unsigned int>::max());
-
         Status status = opCtx->checkForInterruptNoAssert();
 
         if (!status.isOK()) {

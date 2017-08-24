@@ -33,12 +33,12 @@
 #include "mongo/db/catalog/health_log_gen.h"
 #include "mongo/db/query/plan_executor.h"
 #include "mongo/db/repl/dbcheck_gen.h"
+#include "mongo/db/db_raii.h"
 #include "mongo/util/md5.hpp"
 
 namespace mongo {
 
 // Forward declarations.
-class AutoGetCollection;
 class Collection;
 class OperationContext;
 
@@ -157,15 +157,41 @@ private:
     int64_t _bytesSeen = 0;
 };
 
+class AutoGetDbForDbCheck {
+public:
+    AutoGetDbForDbCheck(OperationContext* opCtx,
+                        const NamespaceString& nss);
+
+    Database* getDb(void) {
+        return _db;
+    }
+
+private:
+    OperationContext* _opCtx;
+    Lock::GlobalLock _global;
+    Lock::ResourceLock _dbLock;
+    Database* _db;
+};
+
 /**
- * Get a new, locked, collection handle.
- *
- * Equivalent to the AutoGetCollectionForRead constructor, except that if the collection is missing
- * it will report that to the health log.
+ * Equivalent to AutoGetCollection constructor, except that if the collection is missing it will
+ * report that to the health log, and it takes a global IX lock as a workaround to SERVER-28544.
  */
-std::unique_ptr<AutoGetCollection> getCollectionForDbCheck(OperationContext* opCtx,
-                                                           const NamespaceString& nss,
-                                                           const OplogEntriesEnum& type);
+class AutoGetCollectionForDbCheck {
+public:
+    AutoGetCollectionForDbCheck(OperationContext* opCtx,
+                                const NamespaceString& nss,
+                                const OplogEntriesEnum& type);
+    Collection *getCollection(void) {
+        return _collection;
+    }
+
+private:
+    AutoGetDbForDbCheck _agd;
+    Lock::CollectionLock _collLock;
+    Collection* _collection;
+};
+
 
 /**
  * Gather the index information for a collection.
