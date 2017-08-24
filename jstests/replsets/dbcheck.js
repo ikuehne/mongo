@@ -145,7 +145,12 @@
         let result = healthLogCounts(conn.getDB("local").system.healthlog);
 
         assert.eq(result.totalDocs, coll.count(), "dbCheck batches do not count all documents");
-        assert.eq(result.totalBytes, coll.dataSize(), "dbCheck batches do not count all bytes");
+
+        // Calculate the size on the client side, because collection.dataSize is not necessarily the
+        // sum of the document sizes.
+        let size = coll.find().toArray().reduce((x, y) => x + bsonsize(y), 0)
+
+        assert.eq(result.totalBytes, size, "dbCheck batches do not count all bytes");
     }
 
     // First check behavior when everything is consistent.
@@ -310,20 +315,20 @@
 
         // Step down the master.  This will close our connection.
         try {
-            master.getDB("admin").runCommand({
-                replSetStepDown: 0,
-                force: true
-            });
-        // (throwing an exception in the process, which we will ignore).
-        } catch (e) {}
+            master.getDB("admin").runCommand({replSetStepDown: 0, force: true});
+            // (throwing an exception in the process, which we will ignore).
+        } catch (e) {
+        }
 
         // Wait for the cluster to come up.
         replSet.awaitSecondaryNodes();
 
         // Find the node we ran dbCheck on.
-        db = replSet.getSecondaries().filter(function isPreviousMaster(node) {
-            return replSet.getNodeId(node) === nodeId;
-        })[0].getDB(dbName);
+        db = replSet.getSecondaries()
+                 .filter(function isPreviousMaster(node) {
+                     return replSet.getNodeId(node) === nodeId;
+                 })[0]
+                 .getDB(dbName);
 
         // Check that it's still responding.
         try {
@@ -335,7 +340,6 @@
 
         // And that our dbCheck completed.
         assert(dbCheckCompleted(db), "dbCheck failed to terminate on stepdown");
-
     }
 
     testSucceedsOnStepdown();
